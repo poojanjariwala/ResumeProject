@@ -1,27 +1,26 @@
 FROM python:3.10-slim
 
-# This ensures Python finds your modules correctly
-ENV PYTHONPATH=/app
+# This is the "Magic" line that fixes the ModuleNotFoundError
+ENV PYTHONPATH=/
 
 WORKDIR /app
 
-# Install system dependencies
+# Install dependencies
 RUN apt-get update && apt-get install -y \
     build-essential \
     libpq-dev \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements from your local 'app' folder to the container's root
+# Copy requirements from your local 'app' folder
 COPY app/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# CRITICAL CHANGE: Copy the CONTENTS of your local 'app' folder 
-# directly into the container's /app WORKDIR
-COPY app/ .
+# Copy the ENTIRE project into the container's /app directory
+COPY . .
 
-# Create the data directory
+# Create data directory
 RUN mkdir -p /app/data
 
-# Now main.py is in the root of /app, so we run it directly
-CMD ["python", "main.py"]
+# Run the app directly from the /app directory
+CMD ["python", "app/main.py"]
