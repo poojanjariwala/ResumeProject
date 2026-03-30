@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 import shutil
 import os
 import uuid
+import uvicorn
 
 from app.database import init_db, SessionLocal, Candidate, HRUser, JobRole
 from app.worker import process_resume_task
@@ -34,9 +35,11 @@ async def upload_resume(file: UploadFile = File(...), job_id: int = Form(None)):
     """
     Upload a resume (PDF/DOCX) for asynchronous processing.
     """
+    # Ensure the data directory exists
     os.makedirs("/app/data", exist_ok=True)
     file_ext = os.path.splitext(file.filename)[1]
-    # Save file to a shared volume path accessible by Celery Worker
+    
+    # Save file to a shared volume path
     temp_filename = f"/app/data/{uuid.uuid4()}{file_ext}"
     
     with open(temp_filename, "wb") as buffer:
@@ -60,9 +63,6 @@ def get_parse_status(task_id: str):
 
 @app.get("/api/v1/candidates/{candidate_id}/skills", tags=["Candidates"])
 def get_candidate_skills(candidate_id: int, db: Session = Depends(get_db)):
-    """
-    Retrieve normalized skills for a given candidate profile by ID.
-    """
     candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -74,9 +74,6 @@ def get_candidate_skills(candidate_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/candidates/{candidate_id}", tags=["Candidates"])
 def get_candidate_details(candidate_id: int, db: Session = Depends(get_db)):
-    """
-    Retrieve full parsed resume data for a given candidate profile by ID.
-    """
     candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -89,9 +86,6 @@ def get_candidate_details(candidate_id: int, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/candidates/{candidate_id}/resume", tags=["Candidates"])
 def download_candidate_resume(candidate_id: int, db: Session = Depends(get_db)):
-    """
-    Download the original resume file for a candidate.
-    """
     candidate = db.query(Candidate).filter(Candidate.id == candidate_id).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -106,9 +100,6 @@ def download_candidate_resume(candidate_id: int, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/match", tags=["Job Matching"])
 def match_candidate(request: MatchRequest, db: Session = Depends(get_db)):
-    """
-    Semantic match between candidate resume profile and a job description.
-    """
     candidate = db.query(Candidate).filter(Candidate.id == request.candidate_id).first()
     if not candidate:
         raise HTTPException(status_code=404, detail="Candidate not found")
@@ -118,20 +109,16 @@ def match_candidate(request: MatchRequest, db: Session = Depends(get_db)):
 
 @app.post("/api/v1/match/batch", tags=["Job Matching"])
 def match_batch_candidates(request: BatchMatchRequest, db: Session = Depends(get_db)):
-    """
-    Evaluates a batch of candidates against a job description and groups them.
-    """
     candidates = db.query(Candidate).filter(Candidate.id.in_(request.candidate_ids)).all()
     results = []
     for candidate in candidates:
         res = match_candidate_to_job(candidate, request)
         results.append(res)
     
-    # Sort by score descending
     results.sort(key=lambda x: x.score, reverse=True)
     return {"matches": results}
 
-# --- HR Login and Job Roles ---
+# --- HR Auth and Jobs ---
 @app.post("/api/v1/auth/signup", tags=["Authentication"])
 def hr_signup(hr: HRSup, db: Session = Depends(get_db)):
     existing = db.query(HRUser).filter(HRUser.email == hr.email).first()
@@ -160,18 +147,25 @@ def create_job(job: JobCreate, db: Session = Depends(get_db)):
 
 @app.get("/api/v1/jobs/hr/{hr_id}", tags=["Jobs"])
 def get_hr_jobs(hr_id: int, db: Session = Depends(get_db)):
-    jobs = db.query(JobRole).filter(JobRole.hr_id == hr_id).all()
-    return jobs
+    return db.query(JobRole).filter(JobRole.hr_id == hr_id).all()
 
 @app.get("/api/v1/jobs/{job_id}", tags=["Jobs"])
 def get_job(job_id: int, db: Session = Depends(get_db)):
-    job = db.query(JobRole).filter(JobRole.id == job_id).first()
-    return job
+    return db.query(JobRole).filter(JobRole.id == job_id).first()
 
 @app.get("/api/v1/jobs/{job_id}/candidates", tags=["Jobs"])
 def get_job_candidates(job_id: int, db: Session = Depends(get_db)):
     candidates = db.query(Candidate).filter(Candidate.job_id == job_id).all()
     return [{"id": c.id, "name": c.name} for c in candidates]
 
-# Serve the visual Frontend UI on the root URL
-app.mount("/", StaticFiles(directory="app/static", html=True), name="static")
+# --- Static File Serving ---
+# Using 'static' instead of 'app/static' because of the Docker WORKDIR flattening
+static_path = "static" if os.path.exists("static") else "app/static"
+app.mount("/", StaticFiles(directory=static_path, html=True), name="static")
+
+# --- Startup Block for Railway ---
+if __name__ == "__main__":
+    # Get port from environment variable (Railway default) or fallback to 8000
+    port = int(os.environ.get("PORT", 8000))
+    # Must listen on 0.0.0.0 for external traffic
+    uvicorn.run(app, host="0.0.0.0", port=port)
