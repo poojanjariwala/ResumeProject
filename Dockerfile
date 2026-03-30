@@ -16,3 +16,4 @@ COPY . .
 
 # Create a data directory for uploading files to share between API and Worker
 RUN mkdir -p /app/data
+CMD ["python", "app/main.py"]
